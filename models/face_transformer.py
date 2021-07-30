@@ -8,6 +8,7 @@ from torch import nn
 from .transformer import Transformer
 from .pencoder import NestedTensor, nested_tensor_from_tensor_list
 from .backbone import build_backbone
+from util import box_ops
 
 class FaceTransformer(nn.Module):
     def __init__(self, config, pretrained_path):
@@ -20,19 +21,20 @@ class FaceTransformer(nn.Module):
         self.properties = config.get("properties")
         num_properties = len(self.properties)
         self.backbone = build_backbone(config)
-        self.transformer_t = Transformer(config)
-        decoder_dim = self.transformer_t.d_model
+        self.transformer = Transformer(config)
+        decoder_dim = self.transformer.d_model
         self.input_proj = nn.Conv2d(self.backbone.num_channels[0], decoder_dim, kernel_size=1)
         self.query_embed = nn.Embedding(num_properties, decoder_dim)
         self.log_softmax = nn.LogSoftmax(dim=1)
-        property_heads = {}
-        for property, property_dict in self.properties.items():
+
+        property_heads = []
+        for i, (property, property_dict) in enumerate(self.properties.items()):
             property_dim = property_dict["dim"]
             att_net = PropertyHead(decoder_dim, property_dim)
-            property_heads[property] = att_net
-        self.property_heads = property_heads
+            property_heads.append(att_net)
+        self.property_heads = nn.Sequential(*property_heads)
 
-    def forward_transformer(self, data):
+    def forward_transformer(self, samples):
         """
         Forward of the Transformers
         The forward pass expects a dictionary with key-value 'img' -- NestedTensor, which consists of:
@@ -40,8 +42,6 @@ class FaceTransformer(nn.Module):
                - samples.mask: a binary mask of shape [batch_size x H x W], containing 1 on padded pixels NOT USED
         return the latent embedding from the decoder
         """
-        samples = data.get('img')
-
         # Handle data structures
         if isinstance(samples, (list, torch.Tensor)):
             samples = nested_tensor_from_tensor_list(samples)
@@ -53,7 +53,7 @@ class FaceTransformer(nn.Module):
 
         # Run through the transformer to translate to global and local properties
         assert mask is not None
-        latent_property = self.transformer_t(self.input_proj_t(src), mask, self.query_embed_t.weight, pos[0])[0][0]
+        latent_property = self.transformer(self.input_proj(src), mask, self.query_embed.weight, pos[0])[0][0]
 
         return latent_property
 
@@ -69,7 +69,7 @@ class FaceTransformer(nn.Module):
         latent_property = self.forward_transformer(data)
         res = {}
         for i, property in enumerate(self.properties.keys()):
-            res[property] = self.heads[i](latent_property[:, i, :])
+            res[property] = self.property_heads[i](latent_property[:, i, :])
 
         return res
 
@@ -113,38 +113,54 @@ class FaceAttrCriterion(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.properties = config.get("properties")
-        property_losses = {}
-        for property, property_dict in self.properties.items():
-            property_type = property_dict["type"]
-            if property_type == "binary_cls":  # binary classifier
-                property_losses[property] = nn.BCEWithLogitsLoss()
-            elif property_type == "multi_cls":
-                property_losses[property] = nn.NLLLoss()
-            elif property_type == "regresion":
-                property_losses[property] = nn.MSELoss()
-            elif property_type == "representation":  # recognition with Triplet Loss # TODO add support in forward pass
-                property_losses[property] = nn.TripletMarginLoss(margin=0.25)
-            else:
-                raise NotImplementedError("Attribute type {} not supported".format(property_type))
-        self.property_losses = property_losses
         self.weight_dict = config.get("losses_weights")
 
-    def forward(self, res):
+    def forward(self, res, target_dict):
         out = {}
-        for property, logit in res.items():
-           out[property] = self.losses(logit)
-        return out
+        for i, (property, logit) in enumerate(res.items()):
+            property_type = self.properties.get(property).get("type")
+            if property_type == "binary_cls":  # binary classifier
+                out[property] = F.binary_cross_entropy_with_logits(logit, target_dict[property])
+            elif property_type == "multi_cls":
+                out[property] = F.nll_loss(logit, target_dict[property])
+            elif property_type == "regresion":
+                out[property] = F.mse_loss(logit, target_dict[property])
+            elif property_type == "iou":
+                # l1 + iou + generalized iou
+                pred_boxes = F.sigmoid(logit)
+                gt_boxes = target_dict[property]
+                iou, _ = box_ops.box_iou(pred_boxes, gt_boxes)
+                F.smooth_l1_loss(pred_boxes, gt_boxes) + iou
+            else:
+                # TODO add support in forward pass for representation learning with triplet loss
+                raise NotImplementedError("Property type {} not supported".format(property_type))
+        loss = 0.0
+        for k, v in out.items():
+            w = self.weight_dict.get(k)
+            if w is None:
+                w = 1.0
+            loss += w*v
+        loss_dict = {k:v.item() for k,v in out.items()} # for debugging puprposes
+        return loss, loss_dict
 
+def postprocess(res, config, img_size):
+    postprocess_dict = config.get("post_process")
 
-def postprocess(res, config):
     for property, x in res.items():
-        property_type = config.get(property)["property_type"]
-        property_th = config.get(property)["threshold"]
-        if property_type == "binary_cls":  # binary classifier
+        f = postprocess_dict.get(property)["f"]
+        if f == "sigmoid":  # binary classifier
+            property_th = postprocess_dict.get(property).get("threshold")
             return F.sigmoid(x) > property_th
-        elif property_type == "multi_cls":
+        elif f == "softmax":
             return torch.argmax(F.softmax(x, dim=1))
-        elif property_type == "regresion":
+        elif f == "identity":
             return x
+        elif f == "sigmoid-scale": #bbox
+            x = F.sigmoid(x)
+            boxes = box_ops.box_cxcywh_to_xyxy(x)
+            # and from relative [0, 1] to absolute [0, height] coordinates
+            img_h, img_w = img_size.unbind(1)
+            scale_fct = torch.stack([img_w, img_h, img_w, img_h], dim=1)
+            return boxes * scale_fct[:, None, :]
         else:
             raise NotImplementedError("Attribute type {} not supported".format(property_type))

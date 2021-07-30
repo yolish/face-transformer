@@ -6,7 +6,19 @@ import torch
 import numpy as np
 import json
 import logging
-from util import utils
+from util import utils, box_ops
+
+
+
+
+
+
+
+
+
+
+
+
 import time
 from models.face_transformer import FaceTransformer, FaceAttrCriterion, postprocess
 from os.path import join
@@ -36,7 +48,6 @@ if __name__ == "__main__":
     if args.experiment is not None:
         logging.info("Experiment details: {}".format(args.experiment))
     logging.info("Using dataset: {}".format(args.dataset_path))
-    logging.info("Using labels file: {}".format(args.labels_file))
 
     # Read configuration
     with open(args.config_file, "r") as read_file:
@@ -59,8 +70,7 @@ if __name__ == "__main__":
 
     # Create the model
     model = FaceTransformer(config, args.backbone_path).to(device)
-    # Load the checkpoint if needed
-
+    # Load the checkpoin
     if args.checkpoint_path:
         model.load_state_dict(torch.load(args.checkpoint_path, map_location=device_id))
         logging.info("Initializing from checkpoint: {}".format(args.checkpoint_path))
@@ -72,7 +82,7 @@ if __name__ == "__main__":
         model.train()
 
         # Set loss
-        criterion = FaceAttrCriterion(config)
+        criterion = FaceAttrCriterion(config).to(device)
 
         # Set the optimizer and scheduler
         params = list(model.parameters())
@@ -85,7 +95,7 @@ if __name__ == "__main__":
                                                     gamma=config.get('lr_scheduler_gamma'))
 
         # Set the dataset and data loader
-        transform = transforms.Compose([transforms.ToPILImage(),
+        transform = transforms.Compose([
                                         transforms.ColorJitter(0.5, 0.5, 0.5, 0.2),
                                         transforms.ToTensor(),
                                         transforms.Normalize(mean=[0.485, 0.456, 0.406],
@@ -120,37 +130,50 @@ if __name__ == "__main__":
 
             for batch_idx, (samples, targets) in enumerate(dataloader):
 
-                samples = samples.to(device)
-                targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
+                attributes = targets[0].transpose(0,1)
+                bbox = targets[1]
+                landmarks = targets[2]
+                identity = targets[3]
+                targets_dict = {}
+                for i, attr_name in enumerate(dataset.attr_names):
+                    targets_dict[attr_name] = attributes[i, :]\
+                        .unsqueeze(1).to(device).to(dtype=torch.float32)
 
+                targets_dict["identity"] = identity.to(device).to(dtype=torch.int64)
+
+                # transform to relative [0, 1] coordinates
+                bbox = bbox
+
+                img_h, img_w = samples.shape[2:]
+                scale_fct = torch.Tensor([img_w, img_h, img_w, img_h]).unsqueeze(0).repeat(samples.shape[0], 1)
+                bbox = bbox / scale_fct
+                targets_dict["bbox"] = bbox.to(device)
+
+                targets_dict["landmarks"] = landmarks.to(device)
+                samples = samples.to(device)
+
+                optimizer.zero_grad()
                 outputs = model(samples)
-                loss_dict = criterion(outputs, targets)
-                weight_dict = criterion.weight_dict
-                loss = sum(loss_dict[k] * weight_dict[k] for k in loss_dict.keys() if k in weight_dict)
+                loss, loss_dict = criterion(outputs, targets_dict)
 
                 if not math.isfinite(loss):
                     print("Loss is {}, stopping training".format(loss))
-                    print(loss_dict)
+                    print(loss)
                     sys.exit(1)
 
-                optimizer.zero_grad()
                 loss.backward()
                 if max_norm > 0:
                     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
                 optimizer.step()
 
                 # Collect for recoding and plotting
-                running_loss += criterion.item()
-                loss_vals.append(criterion.item())
+                running_loss += loss.item()
+                loss_vals.append(loss.item())
                 sample_count.append(n_total_samples)
-
-                # Back prop
-                criterion.backward()
-                optimizer.step()
 
                 # Record loss and performance on train set
                 if batch_idx % n_freq_print == 0:
-                    logging.info("[Batch-{}/Epoch-{}] loss dict: {}".format(batch_idx+1, epoch+1, loss_dict))
+                    logging.info("[Batch-{}/Epoch-{}] loss dict: {}".format(batch_idx+1, epoch+1, loss.item()))
             # Save checkpoint
             if (epoch % n_freq_checkpoint) == 0 and epoch > 0:
                 torch.save(model.state_dict(), checkpoint_prefix + '_checkpoint-{}.pth'.format(epoch))
@@ -171,7 +194,7 @@ if __name__ == "__main__":
                                         transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                                              std=[0.229, 0.224, 0.225])
                                         ])
-        dataset =dataset = CelebA(args.dataset_path, split=args.mode,
+        dataset = CelebA(args.dataset_path, split=args.mode,
                          target_type=["attr", "bbox", "landmarks", "identity"],
                          transform=transform,
                          target_transform=None, download=False)

@@ -17,11 +17,29 @@ from torch import nn, Tensor
 
 class Transformer(nn.Module):
 
-    def __init__(self, d_model=512, nhead=8, num_encoder_layers=6,
-                 num_decoder_layers=6, dim_feedforward=2048, dropout=0.1,
-                 activation="relu", normalize_before=False,
-                 return_intermediate_dec=False):
+    default_config = {
+        "hidden_dim":512,
+        "nhead":8,
+        "num_encoder_layers": 6,
+        "dim_feedforward": 2048,
+        "dropout":0.1,
+        "activation": "gelu",
+        "normalize_before": True,
+        "return_intermediate_dec": False
+    }
+
+    def __init__(self, config = {}):
         super().__init__()
+        config =  {**self.default_config, **config}
+        d_model = config.get("hidden_dim")
+        nhead = config.get("nhead")
+        dim_feedforward = config.get("dim_feedforward")
+        dropout = config.get("dropout")
+        activation = config.get("activation")
+        normalize_before = config.get("normalize_before")
+        num_encoder_layers = config.get("num_encoder_layers")
+        num_decoder_layers = config.get("num_decoder_layers")
+        return_intermediate_dec = config.get("return_intermediate_dec")
 
         encoder_layer = TransformerEncoderLayer(d_model, nhead, dim_feedforward,
                                                 dropout, activation, normalize_before)
@@ -54,9 +72,6 @@ class Transformer(nn.Module):
 
         tgt = torch.zeros_like(query_embed)
         memory = self.encoder(src, src_key_padding_mask=mask, pos=pos_embed)
-
-
-
         hs = self.decoder(tgt, memory, memory_key_padding_mask=mask,
                           pos=pos_embed, query_pos=query_embed)
         return hs.transpose(1, 2), memory.permute(1, 2, 0).view(bs, c, h, w)
