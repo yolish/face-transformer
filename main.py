@@ -102,7 +102,7 @@ if __name__ == "__main__":
                                                              std=[0.229, 0.224, 0.225])])
 
         dataset = CelebA(args.dataset_path, split=args.mode,
-                         target_type=["attr", "bbox", "landmarks", "identity"],
+                         target_type=["attr", "landmarks", "identity"],
                          transform=transform,
                          target_transform=None, download=False)
 
@@ -131,25 +131,21 @@ if __name__ == "__main__":
             for batch_idx, (samples, targets) in enumerate(dataloader):
 
                 attributes = targets[0].transpose(0,1)
-                bbox = targets[1]
-                landmarks = targets[2]
-                identity = targets[3]
+                landmarks = targets[1]
+                identity = targets[2]
                 targets_dict = {}
                 for i, attr_name in enumerate(dataset.attr_names):
                     targets_dict[attr_name] = attributes[i, :]\
                         .unsqueeze(1).to(device).to(dtype=torch.float32)
 
                 targets_dict["identity"] = identity.to(device).to(dtype=torch.int64)
-
-                # transform to relative [0, 1] coordinates
-                bbox = bbox
-
                 img_h, img_w = samples.shape[2:]
-                scale_fct = torch.Tensor([img_w, img_h, img_w, img_h]).unsqueeze(0).repeat(samples.shape[0], 1)
-                bbox = bbox / scale_fct
-                targets_dict["bbox"] = bbox.to(device)
-
-                targets_dict["landmarks"] = landmarks.to(device)
+                scale_fct = torch.Tensor([img_w, img_h,
+                                          img_w, img_h,
+                                          img_w, img_h,
+                                          img_w, img_h,
+                                          img_w, img_h])
+                targets_dict["landmarks"] = (landmarks/scale_fct).to(device)
                 samples = samples.to(device)
 
                 optimizer.zero_grad()

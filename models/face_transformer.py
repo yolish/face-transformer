@@ -123,14 +123,8 @@ class FaceAttrCriterion(nn.Module):
                 out[property] = F.binary_cross_entropy_with_logits(logit, target_dict[property])
             elif property_type == "multi_cls":
                 out[property] = F.nll_loss(logit, target_dict[property])
-            elif property_type == "regresion":
-                out[property] = F.mse_loss(logit, target_dict[property])
-            elif property_type == "iou":
-                # l1 + iou + generalized iou
-                pred_boxes = F.sigmoid(logit)
-                gt_boxes = target_dict[property]
-                iou, _ = box_ops.box_iou(pred_boxes, gt_boxes)
-                F.smooth_l1_loss(pred_boxes, gt_boxes) + iou
+            elif property_type == "sigmoid-regresion":
+                out[property] = F.smooth_l1_loss(F.sigmoid(logit), target_dict[property])
             else:
                 # TODO add support in forward pass for representation learning with triplet loss
                 raise NotImplementedError("Property type {} not supported".format(property_type))
@@ -153,14 +147,14 @@ def postprocess(res, config, img_size):
             return F.sigmoid(x) > property_th
         elif f == "softmax":
             return torch.argmax(F.softmax(x, dim=1))
-        elif f == "identity":
-            return x
-        elif f == "sigmoid-scale": #bbox
+        elif f == "sigmoid-scale":
             x = F.sigmoid(x)
-            boxes = box_ops.box_cxcywh_to_xyxy(x)
-            # and from relative [0, 1] to absolute [0, height] coordinates
-            img_h, img_w = img_size.unbind(1)
-            scale_fct = torch.stack([img_w, img_h, img_w, img_h], dim=1)
-            return boxes * scale_fct[:, None, :]
+            img_h, img_w = img_size
+            scale_fct = torch.Tensor([img_w, img_h,
+                                      img_w, img_h,
+                                      img_w, img_h,
+                                      img_w, img_h,
+                                      img_w, img_h]).to(x.device)
+            return x*scale_fct
         else:
             raise NotImplementedError("Attribute type {} not supported".format(property_type))
