@@ -139,14 +139,21 @@ class FaceAttrCriterion(nn.Module):
 
 def postprocess(res, config, img_size):
     postprocess_dict = config.get("post_process")
-
+    out = {}
     for property, x in res.items():
-        f = postprocess_dict.get(property)["f"]
+
+        # temp
+        if True:
+            out[property] = (F.sigmoid(x) > 0.8).to(dtype=torch.long)
+            continue
+
+        f = postprocess_dict.get(property).get("f")
+
         if f == "sigmoid":  # binary classifier
             property_th = postprocess_dict.get(property).get("threshold")
-            return F.sigmoid(x) > property_th
+            out[property] = F.sigmoid(x) > property_th
         elif f == "softmax":
-            return torch.argmax(F.softmax(x, dim=1))
+            out[property] = torch.argmax(F.softmax(x, dim=1))
         elif f == "sigmoid-scale":
             x = F.sigmoid(x)
             img_h, img_w = img_size
@@ -155,6 +162,7 @@ def postprocess(res, config, img_size):
                                       img_w, img_h,
                                       img_w, img_h,
                                       img_w, img_h]).to(x.device)
-            return x*scale_fct
+            out[property] = x*scale_fct
         else:
             raise NotImplementedError("Attribute type {} not supported".format(property_type))
+    return out

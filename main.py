@@ -7,28 +7,14 @@ import numpy as np
 import json
 import logging
 from util import utils, box_ops
-
-
-
-
-
-
-
-
-
-
-
-
+import matplotlib.pyplot as plt
 import time
 from models.face_transformer import FaceTransformer, FaceAttrCriterion, postprocess
 from os.path import join
 import math
 import sys
 from torchvision import transforms
-import pandas as pd
 from torchvision.datasets import CelebA
-
-
 
 if __name__ == "__main__":
     arg_parser = argparse.ArgumentParser()
@@ -205,23 +191,68 @@ if __name__ == "__main__":
         res = {"img":[], "time":[]}
         for attr in properties:
             res[attr] = []
+        mean = np.array([0.485, 0.456, 0.406]).reshape(3,1,1)
+        std = np.array([0.229, 0.224, 0.225]).reshape(3,1,1)
 
         with torch.no_grad():
             for batch_idx, (samples, targets) in enumerate(dataloader):
+                attributes = targets[0].transpose(0, 1)
+                landmarks = targets[1]
+                identity = targets[2]
+                targets_dict = {}
+                for i, attr_name in enumerate(dataset.attr_names):
+                    targets_dict[attr_name] = attributes[i, :] \
+                        .unsqueeze(1).to(device).to(dtype=torch.float32)
+
+                targets_dict["identity"] = identity.to(device).to(dtype=torch.int64)
+
                 samples = samples.to(device)
                 tic = time.time()
                 outputs = model(samples)
                 toc = time.time()
                 res["time"].append(toc-tic)
-                res["img"].append(dataloader.dataset.paths[batch_idx])
-                proc_outputs = postprocess(outputs, config)
-                for property, val in proc_outputs:
+                res["img"].append(dataloader.dataset.filename[batch_idx])
+                img_h = samples.shape[2]
+                img_w = samples.shape[3]
+                proc_outputs = postprocess(outputs, config, (img_h, img_w))
+                for property, val in proc_outputs.items():
                     res[property].append(val)
-                    #TODO add real value
+                if True:
+                    img = samples[0].cpu().numpy()
+                    # de-normalize
+                    img = (img*std)+mean
+                    # reshape
+                    img = img.transpose(1,2,0)
+                    ext_img = np.zeros((img_h, int(img_w*3),3)) + 255
+                    ext_img[:img_h, :img_w, :] = img
+                    plt.imshow(ext_img)
+                    # Add text
+                    h_offset = 10
+                    w_offset = 20
+                    for property, val in proc_outputs.items():
+                        answer = "Yes" if val == 1 else "No"
+                        s = property + ": {}".format(answer)
+                        if val == targets_dict[property]:
+                            c = 'green'
+                        else:
+                            c = 'red'
+                        plt.text(img_w + w_offset, h_offset, s, c=c, fontsize='x-small')
+                        if h_offset > img_h - 10:
+                            h_offset = 0
+                            w_offset = 200
+                        h_offset += 10
 
-        df = pd.Dataframe(res)
-        out_file = args.chekpoint_path + "_predictions.csv"
-        df.to_csv(out_file)
+                    # Add landmarks
+                    plt.show()
+
+
+
+                #TODO add real value
+
+        out_file = args.chekpoint_path + "_predictions.json"
+        f = open(out_file, "w")
+        f.write(res)
+        f.close()
         print("Predictions written to: {}".format(out_file))
 
 
