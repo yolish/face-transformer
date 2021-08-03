@@ -64,7 +64,7 @@
 		"Wearing_Necktie":{"dim":1, "type":"binary_cls"},
 		"Young":{"dim":1, "type":"binary_cls"},
 		"identity":{"dim":10177, "type":"multi_cls"},
-		"landmarks":{"dim":10, "type":"regression"}
+		"landmarks":{"dim":10, "type":"sigmoid-regresion"}
 	},
 	"postprocess": {},
 	"losses_weights": {"5_o_Clock_Shadow":1.0,
