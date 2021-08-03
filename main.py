@@ -25,7 +25,7 @@ if __name__ == "__main__":
     arg_parser.add_argument("--checkpoint_path",
                             help="path to a pre-trained model (should match the model indicated in model_name")
     arg_parser.add_argument("--experiment", help="a short string to describe the experiment/commit used")
-
+    arg_parser.add_argument("--plot", action="store_true")
     args = arg_parser.parse_args()
     utils.init_logger()
 
@@ -124,7 +124,7 @@ if __name__ == "__main__":
                     targets_dict[attr_name] = attributes[i, :]\
                         .unsqueeze(1).to(device).to(dtype=torch.float32)
 
-                targets_dict["identity"] = identity.to(device).to(dtype=torch.int64)
+                targets_dict["identity"] = identity.to(device).to(dtype=torch.int64)-1
                 img_h, img_w = samples.shape[2:]
                 scale_fct = torch.Tensor([img_w, img_h,
                                           img_w, img_h,
@@ -177,7 +177,7 @@ if __name__ == "__main__":
                                                              std=[0.229, 0.224, 0.225])
                                         ])
         dataset = CelebA(args.dataset_path, split=args.mode,
-                         target_type=["attr", "bbox", "landmarks", "identity"],
+                         target_type=["attr", "landmarks", "identity"],
                          transform=transform,
                          target_transform=None, download=False)
         loader_params = {'batch_size': 1,
@@ -193,7 +193,7 @@ if __name__ == "__main__":
             res[attr] = []
         mean = np.array([0.485, 0.456, 0.406]).reshape(3,1,1)
         std = np.array([0.229, 0.224, 0.225]).reshape(3,1,1)
-
+        stats = {p: [] for p in properties}
         with torch.no_grad():
             for batch_idx, (samples, targets) in enumerate(dataloader):
                 attributes = targets[0].transpose(0, 1)
@@ -204,7 +204,7 @@ if __name__ == "__main__":
                     targets_dict[attr_name] = attributes[i, :] \
                         .unsqueeze(1).to(device).to(dtype=torch.float32)
 
-                targets_dict["identity"] = identity.to(device).to(dtype=torch.int64)
+                targets_dict["identity"] = identity.to(device).to(dtype=torch.int64)-1
 
                 samples = samples.to(device)
                 tic = time.time()
@@ -217,7 +217,11 @@ if __name__ == "__main__":
                 proc_outputs = postprocess(outputs, config, (img_h, img_w))
                 for property, val in proc_outputs.items():
                     res[property].append(val)
-                if True:
+                    if val == targets_dict[property]:
+                        stats[property].append(1)
+                    else:
+                        stats[property].append(0)
+                if args.plot:
                     img = samples[0].cpu().numpy()
                     # de-normalize
                     img = (img*std)+mean
@@ -248,10 +252,11 @@ if __name__ == "__main__":
 
 
                 #TODO add real value
-
-        out_file = args.chekpoint_path + "_predictions.json"
+        for property, vals in stats.items():
+            print("{}: acc {}".format(property, np.mean(vals)))
+        out_file = args.checkpoint_path + "_predictions.json"
         f = open(out_file, "w")
-        f.write(res)
+        json.dump(res, f)
         f.close()
         print("Predictions written to: {}".format(out_file))
 
