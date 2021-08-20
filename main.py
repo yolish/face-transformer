@@ -82,7 +82,7 @@ if __name__ == "__main__":
 
         # Set the dataset and data loader
         transform = transforms.Compose([
-                                        transforms.ColorJitter(0.5, 0.5, 0.5, 0.2),
+                                        transforms.ColorJitter(0.5, 0.5, 0.0, 0.0),
                                         transforms.ToTensor(),
                                         transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                                              std=[0.229, 0.224, 0.225])])
@@ -91,6 +91,8 @@ if __name__ == "__main__":
                          target_type=["attr", "landmarks", "identity"],
                          transform=transform,
                          target_transform=None, download=False)
+
+
 
         loader_params = {'batch_size': config.get('batch_size'),
                                   'shuffle': True,
@@ -188,12 +190,10 @@ if __name__ == "__main__":
         stats = {}
         properties = config.get("properties")
 
-        res = {"img":[], "time":[]}
-        for attr in properties:
-            res[attr] = []
         mean = np.array([0.485, 0.456, 0.406]).reshape(3,1,1)
         std = np.array([0.229, 0.224, 0.225]).reshape(3,1,1)
         stats = {p: [] for p in properties}
+        stats["time"] = []
         with torch.no_grad():
             for batch_idx, (samples, targets) in enumerate(dataloader):
                 attributes = targets[0].transpose(0, 1)
@@ -205,22 +205,26 @@ if __name__ == "__main__":
                         .unsqueeze(1).to(device).to(dtype=torch.float32)
 
                 targets_dict["identity"] = identity.to(device).to(dtype=torch.int64)-1
+                img_h, img_w = samples.shape[2:]
+                targets_dict["landmarks"] = landmarks.to(device)
 
                 samples = samples.to(device)
                 tic = time.time()
                 outputs = model(samples)
                 toc = time.time()
-                res["time"].append(toc-tic)
-                res["img"].append(dataloader.dataset.filename[batch_idx])
+
                 img_h = samples.shape[2]
                 img_w = samples.shape[3]
                 proc_outputs = postprocess(outputs, config, (img_h, img_w))
+                stats["time"].append(toc - tic)
                 for property, val in proc_outputs.items():
-                    res[property].append(val)
-                    if val == targets_dict[property]:
-                        stats[property].append(1)
-                    else:
-                        stats[property].append(0)
+                    # Handle attributes
+                    if property in dataset.attr_names:
+                        if val == targets_dict[property]:
+                            stats[property].append(1)
+                        else:
+                            stats[property].append(0)
+
                 if args.plot:
                     img = samples[0].cpu().numpy()
                     # de-normalize
@@ -234,31 +238,35 @@ if __name__ == "__main__":
                     h_offset = 10
                     w_offset = 20
                     for property, val in proc_outputs.items():
-                        answer = "Yes" if val == 1 else "No"
-                        s = property + ": {}".format(answer)
-                        if val == targets_dict[property]:
-                            c = 'green'
-                        else:
-                            c = 'red'
-                        plt.text(img_w + w_offset, h_offset, s, c=c, fontsize='x-small')
-                        if h_offset > img_h - 10:
-                            h_offset = 0
-                            w_offset = 200
-                        h_offset += 10
+                        # Handle attributes
+                        if property in dataset.attr_names:
+                            answer = "Yes" if val == 1 else "No"
+                            s = property + ": {}".format(answer)
+                            if val == targets_dict[property]:
+                                c = 'green'
+                            else:
+                                c = 'red'
+                            plt.text(img_w + w_offset, h_offset, s, c=c, fontsize='x-small')
+                            if h_offset > img_h - 10:
+                                h_offset = 0
+                                w_offset = 200
+                            h_offset += 10
+                        elif property == "landmarks":
+                            est_points = val[0,:].cpu().numpy().reshape(5,2)
+                            gt_points = landmarks[0, :].cpu().numpy().reshape(5,2)
+                            plt.scatter(est_points[:, 0], est_points[:, 1], s=10, c='blue')
+                            plt.scatter(gt_points[:, 0], gt_points[:, 1], s=10, c='red')
+                        elif property == "identity":
+                            print("Ground Truth id: {}, Estimated id: {}".format(identity.numpy()[0], val.cpu().numpy()))
 
-                    # Add landmarks
                     plt.show()
 
-
-
-                #TODO add real value
         for property, vals in stats.items():
-            print("{}: acc {}".format(property, np.mean(vals)))
-        out_file = args.checkpoint_path + "_predictions.json"
-        f = open(out_file, "w")
-        json.dump(res, f)
-        f.close()
-        print("Predictions written to: {}".format(out_file))
+            if property == "time":
+                print("Time per image: {}".format(np.mean(vals)))
+            else:
+                print("{}: acc {}".format(property, np.mean(vals)))
+
 
 
 
