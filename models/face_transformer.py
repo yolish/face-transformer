@@ -114,6 +114,8 @@ class FaceAttrCriterion(nn.Module):
         super().__init__()
         self.properties = config.get("properties")
         self.weight_dict = config.get("losses_weights")
+        if self.weight_dict is None:
+            self.weight_dict = {}
 
     def forward(self, res, target_dict):
         out = {}
@@ -123,7 +125,7 @@ class FaceAttrCriterion(nn.Module):
                 out[property] = F.binary_cross_entropy_with_logits(logit, target_dict[property])
             elif property_type == "multi_cls":
                 out[property] = F.nll_loss(logit, target_dict[property])
-            elif property_type == "sigmoid-regresion":
+            elif property_type == "sigmoid_regression":
                 out[property] = F.smooth_l1_loss(F.sigmoid(logit), target_dict[property])
             else:
                 # TODO add support in forward pass for representation learning with triplet loss
@@ -138,23 +140,16 @@ class FaceAttrCriterion(nn.Module):
         return loss, loss_dict
 
 def postprocess(res, config, img_size):
-    postprocess_dict = config.get("post_process")
+    postprocess_dict = config.get("properties")
     out = {}
     for property, x in res.items():
-
-        # temp
-        if True:
-            out[property] = (F.sigmoid(x) > 0.8).to(dtype=torch.long)
-            continue
-
-        f = postprocess_dict.get(property).get("f")
-
-        if f == "sigmoid":  # binary classifier
-            property_th = postprocess_dict.get(property).get("threshold")
-            out[property] = F.sigmoid(x) > property_th
-        elif f == "softmax":
-            out[property] = torch.argmax(F.softmax(x, dim=1))
-        elif f == "sigmoid-scale":
+        f = postprocess_dict.get(property).get("type")
+        if f == "binary_cls":  # binary classifier
+            property_th = 0.9
+            out[property] = (F.sigmoid(x) > property_th).to(dtype=torch.long)
+        elif f == "multi_cls":
+            out[property] = torch.argmax(F.log_softmax(x, dim=1))
+        elif f == "sigmoid_regression":
             x = F.sigmoid(x)
             img_h, img_w = img_size
             scale_fct = torch.Tensor([img_w, img_h,
@@ -164,5 +159,5 @@ def postprocess(res, config, img_size):
                                       img_w, img_h]).to(x.device)
             out[property] = x*scale_fct
         else:
-            raise NotImplementedError("Attribute type {} not supported".format(property_type))
+            raise NotImplementedError("Attribute type {} not supported".format(f))
     return out
