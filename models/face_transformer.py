@@ -27,12 +27,29 @@ class FaceTransformer(nn.Module):
         self.query_embed = nn.Embedding(num_properties, decoder_dim)
         self.log_softmax = nn.LogSoftmax(dim=1)
 
-        property_heads = []
+
+        self.binary_cls_head = nn.Linear(decoder_dim, 1)
+        reg_heads = []
+        multi_cls_heads = []
+        self.prop_to_reg_head_idx = {}
+        self.prop_to_cls_head_idx = {}
         for i, (property, property_dict) in enumerate(self.properties.items()):
             property_dim = property_dict["dim"]
-            att_net = PropertyHead(decoder_dim, property_dim)
-            property_heads.append(att_net)
-        self.property_heads = nn.Sequential(*property_heads)
+            property_type = property_dict["type"]
+            if property_type == "binary_cls":
+                pass
+            elif property_type == "multi_cls":
+                j = len(self.prop_to_cls_head_idx)
+                self.prop_to_cls_head_idx[property] = j
+                multi_cls_heads.append(nn.Linear(decoder_dim, property_dim))
+            elif property_type == "sigmoid_regression":
+                j = len(self.prop_to_reg_head_idx)
+                self.prop_to_reg_head_idx[property] = j
+                reg_heads.append(PropertyRegressor(decoder_dim, property_dim))
+            else:
+                raise NotImplementedError("property type {} for property {} not supported".format(property_type, property))
+        self.multi_cls_heads = nn.Sequential(*multi_cls_heads)
+        self.reg_heads = nn.Sequential(*reg_heads)
 
     def forward_transformer(self, samples):
         """
@@ -68,13 +85,20 @@ class FaceTransformer(nn.Module):
         """
         latent_property = self.forward_transformer(data)
         res = {}
-        for i, property in enumerate(self.properties.keys()):
-            res[property] = self.property_heads[i](latent_property[:, i, :])
-
+        for i, (property, property_dict) in enumerate(self.properties.items()):
+            property_type = property_dict["type"]
+            if property_type == "binary_cls":
+                res[property] = self.binary_cls_head(latent_property[:, i, :])
+            elif property_type == "multi_cls":
+                j = self.prop_to_cls_head_idx.get(property)
+                res[property] = self.multi_cls_heads[j](latent_property[:, i, :])
+            elif property_type == "sigmoid_regression":
+                j = self.prop_to_reg_head_idx.get(property)
+                res[property] = self.reg_heads[j](latent_property[:, i, :])
         return res
 
 
-class PropertyHead(nn.Module):
+class PropertyRegressor(nn.Module):
     """ A simple MLP to regress a pose component"""
 
     def __init__(self, decoder_dim, output_dim):
@@ -145,7 +169,7 @@ def postprocess(res, config, img_size):
     for property, x in res.items():
         f = postprocess_dict.get(property).get("type")
         if f == "binary_cls":  # binary classifier
-            property_th = 0.9
+            property_th = 0.8
             out[property] = (F.sigmoid(x) > property_th).to(dtype=torch.long)
         elif f == "multi_cls":
             out[property] = torch.argmax(F.log_softmax(x, dim=1))
