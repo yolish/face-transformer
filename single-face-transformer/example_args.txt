@@ -1,0 +1,20 @@
+train
+/home/yoli/datasets/CelebA
+config.json
+--pretrained_path models/pretrained/detr_resnet50_state_dict.pth
+
+test
+/home/yoli/datasets/CelebA
+config.json
+--checkpoint_path out/run_28_08_21_22_40_checkpoint-20.pth
+--plot
+
+
+run_15_08_21_08_19_final
+out/run_08_08_21_22_32_final.pth
+
+
+
+run_17_08_21_21_45_final.pth
+
+

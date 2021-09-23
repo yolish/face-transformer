@@ -1,0 +1,10 @@
+# training
+--dataset_path
+/home/yoli/datasets/WIDER
+--checkpoint_path
+pretrained/detr_resnet50_state_dict.pth
+--train
+--multiscale
+
+# evaluting
+--dataset_path /home/yoli/datasets/WIDER --checkpoint_path outputs/fdetr_epoch5_checkpoint.pth --eval --multiscale --plot_eval --device cpu
