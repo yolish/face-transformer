@@ -15,7 +15,7 @@ from util import box_ops
 
 def write_results(results_file, img_name, results, box_detection_score):
     f = open(results_file, 'w')
-    box_coords = box_ops.box_xyxy_to_cxcywh(results["boxes"]).cpu().numpy()
+    box_coords = (results["boxes"]).cpu().numpy()
     box_scores = results["scores"].cpu().numpy()
     confident_boxes = box_scores > box_detection_score
     selected_box_coords = box_coords[confident_boxes]
